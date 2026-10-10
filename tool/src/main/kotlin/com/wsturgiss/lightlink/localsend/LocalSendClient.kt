@@ -43,7 +43,11 @@ class LocalSendClient(
      * presented is captured — only discovery and adding by address may do that.
      */
     fun register(host: String, port: Int, expected: String? = null, quick: Boolean = false): Result<Device> = runCatching {
-        val http = client(expected?.let(::PinnedTrust) ?: CapturingTrust, quick)
+        // The trust manager records the certificate as the handshake checks it.
+        // OkHttp's response.handshake is no use here: it "cleans" the chain against
+        // trusted roots, and a self-signed certificate comes back as an empty list.
+        val trust = CapturingTrust(expected)
+        val http = client(trust, quick)
         http.newCall(
             Request.Builder()
                 .url(url(host, port, LocalSend.registerPath()))
@@ -52,9 +56,7 @@ class LocalSendClient(
         ).execute().use { response ->
             if (!response.isSuccessful) throw IOException("register HTTP ${response.code}")
             val info = LocalSend.json.decodeFromString(DeviceInfo.serializer(), response.body!!.string())
-            val certificate = response.handshake?.peerCertificates?.firstOrNull()
-                ?: throw IOException("no certificate presented")
-            val fingerprint = LocalSend.fingerprintOf(certificate.encoded)
+            val fingerprint = trust.seen ?: throw IOException("no certificate presented")
             if (fingerprint.equals(sender.fingerprint, ignoreCase = true)) throw IOException("that is this phone")
             Device(
                 host = host,
@@ -148,11 +150,18 @@ private abstract class ServerOnlyTrust : X509TrustManager {
 }
 
 /**
- * Accepts whatever the server shows, so [LocalSendClient.register] can read it
- * off the handshake. Never used for a send.
+ * For [LocalSendClient.register]: records the fingerprint the server shows. With
+ * [expected] it must match, as [PinnedTrust]; without, anything is accepted —
+ * never used for a send.
  */
-private object CapturingTrust : ServerOnlyTrust() {
-    override fun checkServerTrusted(chain: Array<out X509Certificate>, authType: String?) = Unit
+private class CapturingTrust(private val expected: String?) : ServerOnlyTrust() {
+    @Volatile var seen: String? = null
+
+    override fun checkServerTrusted(chain: Array<out X509Certificate>, authType: String?) {
+        val fingerprint = LocalSend.fingerprintOf(chain.first().encoded)
+        if (expected != null && !fingerprint.equals(expected, ignoreCase = true)) throw PinMismatch()
+        seen = fingerprint
+    }
 }
 
 private class PinnedTrust(private val expected: String) : ServerOnlyTrust() {
