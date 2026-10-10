@@ -25,6 +25,11 @@ class TextEditorScreen(
     private val editorRequest: EditorRequest,
 ) : SimpleLightScreen<String>(sealedActivity) {
 
+    // No view model, so it keeps Link running itself (see LinkViewModel).
+    override fun willShow() = Link.resume()
+
+    override fun onAppPause() = Link.pause()
+
     @Composable
     override fun Content() {
         val keyboardOptionsFlow = rememberKeyboardOptions()

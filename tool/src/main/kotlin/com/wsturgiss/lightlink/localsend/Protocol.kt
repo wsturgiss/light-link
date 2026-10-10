@@ -6,20 +6,23 @@ import java.security.MessageDigest
 import java.util.UUID
 
 /**
- * The slice of LocalSend protocol v2 this tool speaks: `info` to pair, and
- * `prepare-upload` / `upload` to send. Spec: https://github.com/localsend/protocol
+ * The slice of LocalSend protocol v2 this tool speaks, as a full peer: multicast
+ * announcements and `register` to find devices, `prepare-upload` / `upload` to
+ * send, and a text-only `prepare-upload` of its own to receive.
+ * Spec: https://github.com/localsend/protocol
  *
- * The phone is only ever the sender. It runs no server, so it never needs to be
- * reachable — the computer's LocalSend is the one listening on 53317.
+ * While the tool is open the phone listens on 53317 ([LocalSendServer]) — TCP
+ * for requests, UDP for announcements ([Discovery]).
  */
 object LocalSend {
     const val DEFAULT_PORT = 53317
     const val PROTOCOL_VERSION = "2.1"
+    const val MULTICAST_GROUP = "224.0.0.167"
 
     val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; explicitNulls = false }
 
-    fun infoPath() = "/api/localsend/v2/info"
     fun preparePath() = "/api/localsend/v2/prepare-upload"
+    fun registerPath() = "/api/localsend/v2/register"
     fun uploadPath(sessionId: String, fileId: String, token: String) =
         "/api/localsend/v2/upload?sessionId=${enc(sessionId)}&fileId=${enc(fileId)}&token=${enc(token)}"
 
@@ -53,6 +56,17 @@ object LocalSend {
             ),
         )
     }
+
+    /**
+     * The text of a message session, or null if it is anything else. The mirror
+     * of [textSession]: one file, a `text/` type, the text in `preview` — the
+     * shape LocalSend's own "Text" button sends.
+     */
+    fun messageText(request: PrepareUploadRequest): String? {
+        val file = request.files.values.singleOrNull() ?: return null
+        if (!file.fileType.startsWith("text/")) return null
+        return file.preview
+    }
 }
 
 @Serializable
@@ -65,6 +79,26 @@ data class DeviceInfo(
     val port: Int = LocalSend.DEFAULT_PORT,
     val protocol: String = "https",
     val download: Boolean = false,
+    /**
+     * Only in multicast messages: true asks everyone who hears it to register
+     * back. Absent (null) everywhere else.
+     */
+    val announce: Boolean? = null,
+)
+
+/**
+ * A LocalSend device the phone can send to. [fingerprint] is the SHA-256 of the
+ * certificate it presented over TLS — learned when it was discovered or added,
+ * and pinned on every send after.
+ */
+@Serializable
+data class Device(
+    val host: String,
+    val port: Int,
+    val alias: String,
+    val fingerprint: String,
+    val deviceType: String? = null,
+    val deviceModel: String? = null,
 )
 
 @Serializable
@@ -96,12 +130,12 @@ sealed interface SendOutcome {
 }
 
 enum class SendFailure(val message: String) {
-    NotFound("Computer not found. Connect to home Wi-Fi and open LocalSend."),
-    Declined("Declined on the computer."),
-    NotAccepted("Not accepted on the computer in time."),
-    PinRequired("LocalSend wants a PIN. Turn off \"Require PIN\" on the computer."),
-    Busy("LocalSend is busy with another transfer."),
-    CertificateChanged("The computer's certificate changed. Pair again."),
+    NotFound("Not found. Is it on the same Wi-Fi, with LocalSend open?"),
+    Declined("Declined."),
+    NotAccepted("Not accepted in time."),
+    PinRequired("It wants a PIN. Turn off \"Require PIN\" in its LocalSend."),
+    Busy("It is busy with another transfer."),
+    CertificateChanged("Its certificate changed. Forget it and add it again."),
     Unexpected("LocalSend returned an error."),
     ;
 

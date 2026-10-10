@@ -20,6 +20,10 @@ import javax.security.auth.x500.X500Principal
  * mode the sender's fingerprint *is* the hash of that certificate. The protocol
  * README does not say so.
  *
+ * The same certificate is the phone's server certificate when it receives
+ * ([LocalSendServer]). It has to be: the computer pins the fingerprint the phone
+ * registered with, which LocalSend checks against this client certificate.
+ *
  * The key lives in the Android Keystore, which also issues the self-signed
  * certificate, so no key material ever sits in app storage.
  */
@@ -44,10 +48,15 @@ object ClientIdentity {
             override fun getCertificateChain(alias: String?) = chain
             override fun getPrivateKey(alias: String?) = key
             override fun getClientAliases(keyType: String?, issuers: Array<out Principal>?) = arrayOf(ALIAS)
-            override fun getServerAliases(keyType: String?, issuers: Array<out Principal>?) = null
-            override fun chooseServerAlias(keyType: String?, issuers: Array<out Principal>?, socket: Socket?) = null
+            // The TLS stack asks per key type ("RSA", "EC"); only the EC one is ours.
+            override fun getServerAliases(keyType: String?, issuers: Array<out Principal>?) =
+                if (isEc(keyType)) arrayOf(ALIAS) else null
+            override fun chooseServerAlias(keyType: String?, issuers: Array<out Principal>?, socket: Socket?) =
+                ALIAS.takeIf { isEc(keyType) }
         }
     }
+
+    private fun isEc(keyType: String?) = keyType == null || keyType.startsWith("EC")
 
     private fun generate() {
         KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, "AndroidKeyStore").apply {

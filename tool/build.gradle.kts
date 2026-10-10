@@ -75,6 +75,8 @@ kotlin {
 
 dependencies {
     implementation(project(":sdk:client"))
+    // QR codes for "Receive via link".
+    implementation(libs.zxing.core)
     testImplementation(libs.kotlin.test)
     ksp(libs.androidx.room.compiler)
 }

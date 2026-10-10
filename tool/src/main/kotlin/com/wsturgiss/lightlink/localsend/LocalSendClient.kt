@@ -16,52 +16,64 @@ import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.X509KeyManager
 import javax.net.ssl.X509TrustManager
 
-/** A computer the phone has paired with: where it is, and the certificate it showed. */
-data class Computer(
-    val host: String,
-    val port: Int,
-    val alias: String,
-    val fingerprint: String,
-)
-
 /**
  * Blocking LocalSend client. Call from a background dispatcher.
  *
  * LocalSend serves HTTPS with a self-signed certificate on a bare LAN IP, so
- * neither the CA chain nor the hostname can be checked. Trust is the pinned
- * certificate fingerprint instead: captured once when pairing, required on
- * every send after. The phone presents [identity] in return — LocalSend
- * refuses a client without a certificate.
+ * neither the CA chain nor the hostname can be checked. Trust is the
+ * certificate fingerprint instead: learned by [register] when a device is
+ * discovered or added, and pinned on every send after. The phone presents
+ * [identity] in return — LocalSend refuses a client without a certificate.
  */
 class LocalSendClient(
     private val sender: DeviceInfo,
     private val identity: X509KeyManager,
 ) {
+    // One pool for every request; each call only swaps the trust it needs.
+    private val base = OkHttpClient.Builder()
+        // A LAN IP never matches a self-signed cert's name; the fingerprint is the check.
+        .hostnameVerifier { _, _ -> true }
+        .build()
 
     /**
-     * Pair step: reach the computer, record the certificate it presents, and read
-     * its name. Nothing is trusted yet — the caller shows the name and asks.
+     * Register with whatever LocalSend answers at [host]:[port] and learn who it
+     * is: this is discovery, and it is also what makes the other side list the
+     * phone. With [expected] the certificate must have that fingerprint (it was
+     * claimed in an announcement, or the device is saved); without, whatever is
+     * presented is captured — only discovery and adding by address may do that.
      */
-    fun probe(host: String, port: Int): Result<Computer> = runCatching {
-        val trust = CapturingTrust()
-        val response = client(trust).newCall(
-            Request.Builder().url(url(host, port, LocalSend.infoPath())).get().build(),
-        ).execute()
-        response.use {
-            if (!it.isSuccessful) throw IOException("info HTTP ${it.code}")
-            val info = LocalSend.json.decodeFromString<DeviceInfo>(it.body!!.string())
-            val seen = trust.fingerprint ?: throw IOException("no certificate presented")
-            Computer(host = host, port = port, alias = info.alias, fingerprint = seen)
+    fun register(host: String, port: Int, expected: String? = null, quick: Boolean = false): Result<Device> = runCatching {
+        val http = client(expected?.let(::PinnedTrust) ?: CapturingTrust, quick)
+        http.newCall(
+            Request.Builder()
+                .url(url(host, port, LocalSend.registerPath()))
+                .post(LocalSend.json.encodeToString(DeviceInfo.serializer(), sender).toRequestBody(JSON))
+                .build(),
+        ).execute().use { response ->
+            if (!response.isSuccessful) throw IOException("register HTTP ${response.code}")
+            val info = LocalSend.json.decodeFromString(DeviceInfo.serializer(), response.body!!.string())
+            val certificate = response.handshake?.peerCertificates?.firstOrNull()
+                ?: throw IOException("no certificate presented")
+            val fingerprint = LocalSend.fingerprintOf(certificate.encoded)
+            if (fingerprint.equals(sender.fingerprint, ignoreCase = true)) throw IOException("that is this phone")
+            Device(
+                host = host,
+                port = port,
+                alias = info.alias,
+                fingerprint = fingerprint,
+                deviceType = info.deviceType,
+                deviceModel = info.deviceModel,
+            )
         }
     }
 
-    fun sendText(computer: Computer, text: String): SendOutcome {
+    fun sendText(device: Device, text: String): SendOutcome {
         val request = LocalSend.textSession(sender, text)
-        val http = client(PinnedTrust(computer.fingerprint))
+        val http = client(PinnedTrust(device.fingerprint), quick = false)
         return try {
             val prepared = http.newCall(
                 Request.Builder()
-                    .url(url(computer.host, computer.port, LocalSend.preparePath()))
+                    .url(url(device.host, device.port, LocalSend.preparePath()))
                     .post(LocalSend.json.encodeToString(PrepareUploadRequest.serializer(), request).toRequestBody(JSON))
                     .build(),
             ).execute().use { response ->
@@ -77,7 +89,7 @@ class LocalSendClient(
             val token = prepared.files[fileId] ?: return SendOutcome.Delivered
             http.newCall(
                 Request.Builder()
-                    .url(url(computer.host, computer.port, LocalSend.uploadPath(prepared.sessionId, fileId, token)))
+                    .url(url(device.host, device.port, LocalSend.uploadPath(prepared.sessionId, fileId, token)))
                     .post(meta.preview.orEmpty().toByteArray(Charsets.UTF_8).toRequestBody(OCTETS))
                     .build(),
             ).execute().use { response ->
@@ -99,16 +111,22 @@ class LocalSendClient(
         }
     }
 
-    private fun client(trust: X509TrustManager): OkHttpClient {
+    private fun client(trust: X509TrustManager, quick: Boolean): OkHttpClient {
         val ssl = SSLContext.getInstance("TLS").apply { init(arrayOf(identity), arrayOf(trust), SecureRandom()) }
-        return OkHttpClient.Builder()
+        return base.newBuilder()
             .sslSocketFactory(ssl.socketFactory, trust)
-            // A LAN IP never matches a self-signed cert's name; the pin is the check.
-            .hostnameVerifier { _, _ -> true }
-            // Short: an unreachable computer should say so quickly, not hang.
-            .connectTimeout(3, TimeUnit.SECONDS)
-            // Long: LocalSend holds prepare-upload open until someone clicks Accept.
-            .readTimeout(60, TimeUnit.SECONDS)
+            .apply {
+                if (quick) {
+                    // Discovery and scans: LAN peers answer fast or not at all.
+                    connectTimeout(1, TimeUnit.SECONDS)
+                    readTimeout(2, TimeUnit.SECONDS)
+                } else {
+                    // Short: an unreachable device should say so quickly, not hang.
+                    connectTimeout(3, TimeUnit.SECONDS)
+                    // Long: LocalSend holds prepare-upload open until someone clicks Accept.
+                    readTimeout(60, TimeUnit.SECONDS)
+                }
+            }
             .build()
     }
 
@@ -121,7 +139,7 @@ class LocalSendClient(
     }
 }
 
-private class PinMismatch : CertificateException("certificate fingerprint does not match the paired computer")
+private class PinMismatch : CertificateException("certificate fingerprint does not match the known device")
 
 private abstract class ServerOnlyTrust : X509TrustManager {
     override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) =
@@ -129,12 +147,12 @@ private abstract class ServerOnlyTrust : X509TrustManager {
     override fun getAcceptedIssuers(): Array<X509Certificate> = emptyArray()
 }
 
-/** Accepts whatever the server shows, once, so pairing can record it. */
-private class CapturingTrust : ServerOnlyTrust() {
-    @Volatile var fingerprint: String? = null
-    override fun checkServerTrusted(chain: Array<out X509Certificate>, authType: String?) {
-        fingerprint = LocalSend.fingerprintOf(chain.first().encoded)
-    }
+/**
+ * Accepts whatever the server shows, so [LocalSendClient.register] can read it
+ * off the handshake. Never used for a send.
+ */
+private object CapturingTrust : ServerOnlyTrust() {
+    override fun checkServerTrusted(chain: Array<out X509Certificate>, authType: String?) = Unit
 }
 
 private class PinnedTrust(private val expected: String) : ServerOnlyTrust() {

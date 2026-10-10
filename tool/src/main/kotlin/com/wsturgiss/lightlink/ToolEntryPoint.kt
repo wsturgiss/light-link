@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 @EntryPoint
 object ToolEntryPoint : LightEntryPoint {
 
-    /** Send-only for now: nothing reaches the phone, so there is nothing to push. */
+    /** Receiving happens only while the tool is open, over the LAN; nothing is pushed. */
     override val enablePushNotifications: Boolean = false
 
     override suspend fun onToolCreate(

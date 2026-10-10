@@ -3,7 +3,8 @@ id = "com.wsturgiss.lightlink"
 label = "Link"
 versionCode = 1
 versionName = "0.1.0"
-permissions = ["android.permission.INTERNET"]
+# CAMERA: scanning a device's "Receive via link" QR code to add it.
+permissions = ["android.permission.INTERNET", "android.permission.CAMERA"]
 capabilities = []
 orientation = "portrait"
 # Real LP3 hardware binds to the LightOS system app.
