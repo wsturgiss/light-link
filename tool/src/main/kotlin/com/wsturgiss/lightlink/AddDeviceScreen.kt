@@ -103,6 +103,14 @@ fun parseScan(text: String): Scanned? {
 private val FINGERPRINT_RE = Regex("^[0-9A-Fa-f]{64}$")
 
 /**
+ * A TLS handshake that got plain HTTP back: LocalSend with encryption off, which
+ * is what it does while its link page is open, or if its Encryption setting is
+ * off. Conscrypt reports it as a packet it could not parse.
+ */
+private fun Throwable.answeredInPlainHttp(): Boolean =
+    generateSequence(this) { it.cause }.any { it is javax.net.ssl.SSLException && it.message?.contains("parse TLS packet header") == true }
+
+/**
  * Adding by address, for when discovery cannot see a device (another subnet,
  * multicast blocked): typed, or scanned off its "Receive via link" QR code. The
  * device's certificate is captured here — or checked, if the code carried its
@@ -137,6 +145,17 @@ class AddDeviceViewModel(store: LinkStore) : LinkViewModel<Unit>(store) {
             return
         }
         _address.value = if (scan.port == LocalSend.DEFAULT_PORT) scan.host else "${scan.host}:${scan.port}"
+        // Already nearby at that address, its certificate learned over HTTPS: that is
+        // the device, and there is nothing to wait for. (A code with a fingerprint
+        // must match it, so a stale address can't stand in for the scanned device.)
+        Link.devices.value.firstOrNull { it.nearby && it.device.host == scan.host && it.device.port == scan.port }
+            ?.device
+            ?.takeIf { scan.fingerprint == null || it.fingerprint.equals(scan.fingerprint, ignoreCase = true) }
+            ?.let {
+                finding?.cancel()
+                _state.value = AddState.Found(it)
+                return
+            }
         // Android keeps apps off plain HTTP, and Link only trusts what TLS shows it
         // anyway: wait for the device to leave its link page and serve HTTPS again.
         find(scan.host, scan.port, expected = scan.fingerprint, waitForHttps = !scan.encrypted)
@@ -162,10 +181,12 @@ class AddDeviceViewModel(store: LinkStore) : LinkViewModel<Unit>(store) {
                 onFailure = {
                     Log.w("AddDeviceScreen", "register $host:$port failed", it)
                     AddState.Failed(
-                        if (expected != null && it is javax.net.ssl.SSLHandshakeException) {
-                            "Something else answered at $host:$port, not the device on that code."
-                        } else {
-                            "No LocalSend at $host:$port. Is it open, and on the same Wi-Fi?"
+                        when {
+                            it.answeredInPlainHttp() ->
+                                "It answered without encryption. Close \"Receive via link\" on it, or turn on Encryption in its LocalSend settings, then Find."
+                            expected != null && it is javax.net.ssl.SSLHandshakeException ->
+                                "Something else answered at $host:$port, not the device on that code."
+                            else -> "No LocalSend at $host:$port. Is it open, and on the same Wi-Fi?"
                         },
                     )
                 },
@@ -247,7 +268,7 @@ class AddDeviceScreen(
                     val status = when (val s = state) {
                         AddState.Idle -> null
                         AddState.Looking -> "Looking…"
-                        AddState.WaitingForHttps -> "That link isn't encrypted, so Link can't use it. Close \"Receive via link\" on that device, and Link will find it."
+                        AddState.WaitingForHttps -> "Got it. That phone turns encryption off while it shows its link, so go back to LocalSend's main screen on it. Link will connect as soon as you do."
                         is AddState.Found -> "Found ${s.device.alias}. Save it?"
                         is AddState.Failed -> s.message
                     }
