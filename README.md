@@ -39,7 +39,7 @@ SHA-256 of its certificate — comes from:
 2. **Saved devices.** The phone `POST`s `/register` to each one directly, pinned,
    so they are found where multicast is not. A saved device found at a new IP is
    updated.
-3. **Scan.** If nothing is nearby after 3 s (or on refresh), `/register` to every
+3. **Scan.** 3 s after opening (and on refresh), `/register` to every
    host on the /24. This is what finds another Light Phone.
 
 The LP3 **does not receive multicast** — Android filters it without a

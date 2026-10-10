@@ -65,7 +65,7 @@ data class Listing(val device: Device, val saved: Boolean, val nearby: Boolean)
 object Link {
     private const val TAG = "Link"
     private const val ANNOUNCE_EVERY_MS = 15_000L
-    private const val SCAN_IF_EMPTY_AFTER_MS = 3_000L
+    private const val SCAN_AFTER_MS = 3_000L
     private const val SCAN_CONCURRENCY = 50
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -139,7 +139,9 @@ object Link {
             launch { registerSaved(client) }
             // A burst, as LocalSend does: the first may go out before the network is ready.
             launch { for (wait in listOf(100L, 400L, 1500L)) { delay(wait); discovery.announce() } }
-            launch { delay(SCAN_IF_EMPTY_AFTER_MS); if (_nearby.value.isEmpty()) scan(client) }
+            // Once per opening, whatever else turned up: some phones (an LG here) never
+            // answer announcements, and the scan is the only way to see them.
+            launch { delay(SCAN_AFTER_MS); scan(client) }
             while (isActive) {
                 delay(ANNOUNCE_EVERY_MS)
                 updateNetwork()
