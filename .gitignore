@@ -51,6 +51,9 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
+### Signing keys ###
+/signer/keys/
+
 .local.properties
 
 # Local Android signing keys

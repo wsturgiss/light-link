@@ -139,7 +139,8 @@ System Java 26 breaks Android jlink — always use JBR 21. `local.properties`
 (untracked) needs `sdk.dir=/home/will/Projects/Android`.
 
 `tool/lighttool.toml` targets real hardware (`serverPackage = "com.lightos"`);
-switch it to `com.thelightphone.sdk.emulator` for the emulator.
+switch it to `com.thelightphone.sdk.emulator` for the emulator, and build with
+`-DlightSdk.allowAltServerPackage=true` (the SDK refuses any other value without it).
 
 ## Layout
 
@@ -149,4 +150,4 @@ switch it to `com.thelightphone.sdk.emulator` for the emulator.
   - `HomeScreen.kt` — the initial screen: the tab bar, hosting `SendTab.kt`, `ReceiveTab.kt`, `SettingsTab.kt`
   - `WebShareScreen.kt` — Receive via link; `HistoryScreen.kt`, `ComposeScreen.kt`, `AddDeviceScreen.kt`, `IncomingModal.kt`
   - `assets/web/` — LocalSend's upload page and its licence
-- `sdk/` — vendored `light-sdk` (from `lightphone/light-sdk` @ `57bbbd0`). Read-only.
+- `sdk/` — vendored `light-sdk` (from `lightphone/light-sdk` @ `311aa2d`, SDK 0.2.0). Read-only.
