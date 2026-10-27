@@ -150,4 +150,4 @@ switch it to `com.thelightphone.sdk.emulator` for the emulator, and build with
   - `HomeScreen.kt` — the initial screen: the tab bar, hosting `SendTab.kt`, `ReceiveTab.kt`, `SettingsTab.kt`
   - `WebShareScreen.kt` — Receive via link; `HistoryScreen.kt`, `ComposeScreen.kt`, `AddDeviceScreen.kt`, `IncomingModal.kt`
   - `assets/web/` — LocalSend's upload page and its licence
-- `sdk/` — vendored `light-sdk` (from `lightphone/light-sdk` @ `311aa2d`, SDK 0.2.0). Read-only.
+- `sdk/` — vendored `light-sdk` (from `lightphone/light-sdk` @ `92b8b86`, SDK 0.2.2). Read-only.
